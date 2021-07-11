@@ -2,7 +2,6 @@
 
 TODO:
 
-Correct response when no file found
 Testing
 MakeFile
 Fully parse query string to get parameters &val=210&....
@@ -18,3 +17,4 @@ SSE
 JSON parsing/constructing
 HTML Error handling
 Router
+Multipart parsing

@@ -5,10 +5,16 @@
 #include <netinet/in.h>
 #include <string.h>
 #include <stdarg.h>
-#include "server.h"
 #include <stdbool.h>
+#include "server.h"
+#include "query.h"
 
 #define PORT 8080
+
+void handelError(char* error) {
+    perror(error);
+    exit(EXIT_FAILURE);
+}
 
 void parseString(const char * str, const char * format, ... ) {
     va_list args;
@@ -48,13 +54,11 @@ char* respondGET(struct Request request) {
     char *body= NULL, *headers = NULL, *fullResponse = NULL, *path = NULL;
     FILE *fp;
     char http[] = "HTTP/1.1 200 OK\n";
-    // TODO determine content type by file
-    char contentType[] = "Content-Type: text/html\n";
     if (strcmp(request.query, "/") == 0) {
-        path = malloc(sizeof(char) * (strlen(request.query) + strlen(INDEX_FILE) + 1));
+        path = malloc(sizeof(char) * (strlen(ROOT_FOLDER) + strlen(INDEX_FILE) + 2));
         sprintf(path, "%s%s", ROOT_FOLDER, INDEX_FILE);
     } else {
-        path = malloc(sizeof(char) * (strlen(request.query) + strlen(ROOT_FOLDER) + 1));
+        path = malloc(sizeof(char) * (strlen(request.query) + strlen(ROOT_FOLDER) + 2));
         sprintf(path, "%s%s", ROOT_FOLDER, request.query);
     }
     fp = fopen(path, "r");
@@ -66,21 +70,23 @@ char* respondGET(struct Request request) {
             if (bufsize == -1) { 
                 perror("in ftell");
             }
+            char *contentType = malloc(50 * sizeof(char));
+            sprintf(contentType, "Content-Type: %s\n", parseMIMEType(path));
             char *contentLength = malloc(25 * sizeof(char));
             sprintf(contentLength, "Content-Length: %ld\n\n", bufsize);
             /* Allocate our buffer to that size. */
             body = malloc(sizeof(char) * (bufsize + 1));
-            headers = malloc(sizeof(char) * (strlen(contentLength) + strlen(http) + strlen(contentType)));
+            headers = malloc(sizeof(char) * (strlen(contentLength) + strlen(http) + strlen(contentType) + 1));
             strcat(headers, http);
             strcat(headers, contentType);
             strcat(headers, contentLength);
             /* Go back to the start of the file. */
             if (fseek(fp, 0L, SEEK_SET) != 0) {
-                perror("in fseek");
+                handelError("in fseek");
             }
             /* Read the entire file into memory. */
             size_t newLen = fread(body, sizeof(char), bufsize, fp);
-            if ( ferror( fp ) != 0 ) {
+            if (ferror( fp ) != 0) {
                 fputs("Error reading file", stderr);
             } else {
                 body[newLen++] = '\0'; /* Just to be safe. */
@@ -94,7 +100,7 @@ char* respondGET(struct Request request) {
         free(path);
         fclose(fp);
     } else {
-        char notFound[] = "HTTP/1.1 404 OK\n";
+        char notFound[] = "HTTP/1.1 404 NOT FOUND\n";
         fullResponse = malloc(strlen(notFound));
         strcpy(fullResponse, notFound);
         printf("GET file not found \n");
@@ -118,22 +124,24 @@ char* respond(struct Request request) {
     }
 }
 
+void freeStruct(struct Request *request) {
+    free(request->body);
+}
+
 int main(int argc, char const *argv[]) {
     int server_fd, new_socket; long valread;
     struct sockaddr_in address;
     int addrlen = sizeof(address);
     struct Request request;
     
-    
     // Creating socket file descriptor
     if ((server_fd = socket(AF_INET, SOCK_STREAM, 0)) <= 0) {
-        perror("In socket");
-        exit(EXIT_FAILURE);
+        handelError("In socket");
     }
     // adds option to reuse socet while it is still active. Avoids "address in use" error while testing 
     // restarting server
     if (setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, &(int){1}, sizeof(int)) < 0)
-        perror("setsockopt(SO_REUSEADDR) failed");
+        handelError("setsockopt(SO_REUSEADDR) failed");
 
     /* htonl converts a long integer (e.g. address) to a network representation */ 
     /* htons converts a short integer (e.g. port) to a network representation */ 
@@ -143,35 +151,34 @@ int main(int argc, char const *argv[]) {
     
     memset(address.sin_zero, '\0', sizeof address.sin_zero);
     
-    
     if (bind(server_fd, (struct sockaddr *)&address, sizeof(address)) < 0) {
-        perror("In bind");
-        exit(EXIT_FAILURE);
+        handelError("In bind");
     }
     if (listen(server_fd, 10) < 0) {
-        perror("In listen");
-        exit(EXIT_FAILURE);
+        handelError("In listen");
     }
     while(1) {
         if ((new_socket = accept(server_fd, (struct sockaddr *)&address, (socklen_t*)&addrlen))<0) {
-            perror("In accept");
-            exit(EXIT_FAILURE);
+            handelError("In accept");
         }
         
         char requestString[30000] = {0};
         valread = read(new_socket, requestString, 30000);
+        printf("Request: \n");
         printf("%s\n", requestString);
         parseRequest(requestString, &request);
         char *response = respond(request);
+        printf("Response: \n");
         printf("%s\n", response);
         if (response == NULL) {
             write(new_socket, "", 1);
             printf("No response for query: %s\n", request.query);
         } else {
             write(new_socket, response, strlen(response));
-            free(response);
         }
         close(new_socket);
+        freeStruct(&request);
+        free(response);
     }
     return 0;
 }
